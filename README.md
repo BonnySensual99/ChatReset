@@ -37,7 +37,7 @@ Bot automatizado para Discord en Node.js que **clona y elimina** automáticament
 2. Crea un archivo llamado `.env` en la raíz del proyecto (puedes duplicar `.env.example`):
    ```env
    DISCORD_TOKEN=TuTokenDeDiscordAqui
-   CHANNEL_ID=IDDelCanalQueQuieresQueSeBorre
+   CHANNEL_NAME=nombre-de-tu-canal
    TIMEZONE=Europe/Madrid
    ```
 
