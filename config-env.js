@@ -33,23 +33,28 @@ async function main() {
     let currentToken = (currentEnv.match(/DISCORD_TOKEN=(.*)/) || [])[1] || "";
     let currentChannel = (currentEnv.match(/CHANNEL_NAME=(.*)/) || [])[1] || "chat-diario";
     let currentTimezone = (currentEnv.match(/TIMEZONE=(.*)/) || [])[1] || "Europe/Madrid";
+    let currentCron = (currentEnv.match(/CRON_SCHEDULE=(.*)/) || [])[1] || "0 0 * * *";
 
     console.log(`\nValores actuales:`);
     console.log(`- Token: ${currentToken ? currentToken.substring(0, 15) + "..." : "No configurado"}`);
     console.log(`- Canal a limpiar: ${currentChannel}`);
-    console.log(`- Zona horaria: ${currentTimezone}\n`);
+    console.log(`- Zona horaria: ${currentTimezone}`);
+    console.log(`- Horario Cron: ${currentCron} (00:00 por defecto)\n`);
 
     const newToken = await askQuestion(`Nuevo DISCORD_TOKEN (Pulsa ENTER para mantener el actual): `);
     const newChannel = await askQuestion(`Nuevo CHANNEL_NAME (Pulsa ENTER para mantener [${currentChannel}]): `);
     const newTimezone = await askQuestion(`Nueva TIMEZONE (Pulsa ENTER para mantener [${currentTimezone}]): `);
+    const newCron = await askQuestion(`Nuevo CRON_SCHEDULE (Ej: "*/5 * * * *" para cada 5 min, o ENTER para [${currentCron}]): `);
 
     const finalToken = newToken.trim() || currentToken;
     const finalChannel = newChannel.trim() || currentChannel;
     const finalTimezone = newTimezone.trim() || currentTimezone;
+    const finalCron = newCron.trim() || currentCron;
 
     console.log("\nEnviando cambios al servidor y reiniciando el bot...");
 
-    const envContent = `DISCORD_TOKEN=${finalToken}\nCHANNEL_NAME=${finalChannel}\nTIMEZONE=${finalTimezone}\n`;
+    const envContent = `DISCORD_TOKEN=${finalToken}\nCHANNEL_NAME=${finalChannel}\nTIMEZONE=${finalTimezone}\nCRON_SCHEDULE="${finalCron}"\n`;
+
     
     // Escribir archivo temporal local
     fs.writeFileSync('temp.env', envContent);
