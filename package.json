@@ -1,0 +1,13 @@
+{
+  "name": "discord-auto-nuke-bot",
+  "version": "1.0.0",
+  "description": "Bot de Discord que clona y limpia canales diariamente a las 00:00 para evitar filtraciones de historial.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "node-cron": "^3.0.3"
+  }
+}
