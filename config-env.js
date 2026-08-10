@@ -33,27 +33,55 @@ async function main() {
     let currentToken = (currentEnv.match(/DISCORD_TOKEN=(.*)/) || [])[1] || "";
     let currentChannel = (currentEnv.match(/CHANNEL_NAME=(.*)/) || [])[1] || "chat-diario";
     let currentTimezone = (currentEnv.match(/TIMEZONE=(.*)/) || [])[1] || "Europe/Madrid";
-    let currentCron = (currentEnv.match(/CRON_SCHEDULE=(.*)/) || [])[1] || "0 0 * * *";
+    let rawCron = (currentEnv.match(/CRON_SCHEDULE=(.*)/) || [])[1] || "0 0 * * *";
+    let currentCron = rawCron.replace(/"/g, '').trim();
 
     console.log(`\nValores actuales:`);
     console.log(`- Token: ${currentToken ? currentToken.substring(0, 15) + "..." : "No configurado"}`);
     console.log(`- Canal a limpiar: ${currentChannel}`);
     console.log(`- Zona horaria: ${currentTimezone}`);
-    console.log(`- Horario Cron: ${currentCron} (00:00 por defecto)\n`);
+    console.log(`- Horario actual: ${currentCron}\n`);
 
-    const newToken = await askQuestion(`Nuevo DISCORD_TOKEN (Pulsa ENTER para mantener el actual): `);
-    const newChannel = await askQuestion(`Nuevo CHANNEL_NAME (Pulsa ENTER para mantener [${currentChannel}]): `);
-    const newTimezone = await askQuestion(`Nueva TIMEZONE (Pulsa ENTER para mantener [${currentTimezone}]): `);
-    const newCron = await askQuestion(`Nuevo CRON_SCHEDULE (Ej: "*/5 * * * *" para cada 5 min, o ENTER para [${currentCron}]): `);
+    const newToken = await askQuestion(`1. Nuevo DISCORD_TOKEN (ENTER para mantener): `);
+    const newChannel = await askQuestion(`2. Nuevo CHANNEL_NAME (ENTER para mantener [${currentChannel}]): `);
+    const newTimezone = await askQuestion(`3. Nueva TIMEZONE (ENTER para mantener [${currentTimezone}]): `);
+
+    console.log(`\n4. Selecciona la Frecuencia / Hora de Limpieza:`);
+    console.log(`   [1] Todos los días a las 00:00 (Medianoche - PRODUCCIÓN)`);
+    console.log(`   [2] Modo Prueba: Cada 5 segundos`);
+    console.log(`   [3] Modo Prueba: Cada 1 minuto`);
+    console.log(`   [4] Hora personalizada diaria (ej: escribir 18:30)`);
+    console.log(`   [ENTER] Mantener actual (${currentCron})\n`);
+
+    const scheduleOption = await askQuestion(`Elige opcion de horario (1-4 o ENTER): `);
+
+    let finalCron = currentCron;
+
+    if (scheduleOption.trim() === "1") {
+        finalCron = "0 0 * * *";
+    } else if (scheduleOption.trim() === "2") {
+        finalCron = "*/5 * * * * *";
+    } else if (scheduleOption.trim() === "3") {
+        finalCron = "0 */1 * * * *";
+    } else if (scheduleOption.trim() === "4") {
+        const horaCustom = await askQuestion(`Escribe la hora exacta (formato HH:MM, ej 14:30): `);
+        const parts = horaCustom.trim().split(':');
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            finalCron = `${parseInt(parts[1])} ${parseInt(parts[0])} * * *`;
+        } else {
+            console.log("Formato no válido, manteniendo el horario anterior.");
+        }
+    }
 
     const finalToken = newToken.trim() || currentToken;
     const finalChannel = newChannel.trim() || currentChannel;
     const finalTimezone = newTimezone.trim() || currentTimezone;
-    const finalCron = newCron.trim() || currentCron;
 
-    console.log("\nEnviando cambios al servidor y reiniciando el bot...");
+    console.log(`\nHorario seleccionado: ${finalCron}`);
+    console.log("Enviando cambios al servidor y reiniciando el bot...");
 
     const envContent = `DISCORD_TOKEN=${finalToken}\nCHANNEL_NAME=${finalChannel}\nTIMEZONE=${finalTimezone}\nCRON_SCHEDULE="${finalCron}"\n`;
+
 
     
     // Escribir archivo temporal local
