@@ -78,7 +78,10 @@ client.once('ready', () => {
     console.log(`💡 TRUCO DE PRUEBAS: Escribe "!nuke" en cualquier canal para probar la limpieza de inmediato.`);
     console.log(`========================================`);
 
-    cron.schedule(CRON_SCHEDULE, () => {
+    // Permitir expresiones de 5 o 6 campos en node-cron (ej: '*/5 * * * * *' para 5 segundos)
+    const cronSchedule = process.env.CRON_SCHEDULE || '0 0 * * *';
+
+    cron.schedule(cronSchedule, () => {
         console.log('⏰ Ejecutando limpieza programada...');
         nukeAndResetChannel();
     }, {
@@ -88,4 +91,5 @@ client.once('ready', () => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
 
