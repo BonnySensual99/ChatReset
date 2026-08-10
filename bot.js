@@ -44,12 +44,23 @@ async function nukeAndResetChannel() {
             reason: 'Reinicio de canal para privacidad e historial limpio.'
         });
 
+        // Restablecer la posición del nuevo canal
         await newChannel.setPosition(position);
 
-        await newChannel.send({
+        // Enviar aviso y borrarlo automáticamente tras 5 segundos (5000 ms)
+        const noticeMsg = await newChannel.send({
             content: '🧹 **Este canal ha sido limpiado automáticamente.** El historial anterior ha sido eliminado.'
         });
 
+        setTimeout(async () => {
+            try {
+                await noticeMsg.delete();
+            } catch (err) {
+                // Ignorar error si el mensaje o canal ya fue eliminado
+            }
+        }, 5000);
+
+        // 2. Eliminar el canal viejo
         await channel.delete('Reinicio de canal.');
 
         console.log(`[ÉXITO] Canal "${TARGET_CHANNEL_NAME}" reiniciado con éxito.`);
