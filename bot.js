@@ -34,7 +34,7 @@ const TEMP_VOICE_CREATOR_NAME = process.env.TEMP_VOICE_CREATOR_NAME || '➕ Crea
 const ROLE_TRUSTED_NAME = process.env.ROLE_TRUSTED_NAME || 'trusted';
 const ROLE_VERIFIED_NAME = process.env.ROLE_VERIFIED_NAME || 'verified';
 
-// Mapa para rastrear los canales de voz temporales creados: ID_Canal -> { ownerId, controlMsgId }
+// Mapa para rastrear los canales de voz temporales creados: ID_Canal -> { ownerId, controlMsgId, trustedUsers: Set }
 const activeTempChannels = new Map();
 
 async function nukeAndResetChannel() {
@@ -84,8 +84,9 @@ function buildVoiceControlPanel() {
         .setColor('#5865F2')
         .addFields(
             { name: '🔒 / 🔓 Privacidad', value: 'Bloquea o desbloquea tu sala', inline: true },
-            { name: '✏️ Nombre', value: 'Cambia el nombre de tu canal', inline: true },
-            { name: '👥 Límite', value: 'Cambia el límite de usuarios', inline: true }
+            { name: '✏️ Nombre', value: 'Cambia el nombre', inline: true },
+            { name: '👥 Límite', value: 'Límite de usuarios', inline: true },
+            { name: '⭐ Trust / Untrust', value: 'Permite/prohíbe el acceso a usuarios específicos', inline: false }
         )
         .setFooter({ text: 'Solo el dueño de la sala puede usar estos botones' });
 
@@ -102,15 +103,25 @@ function buildVoiceControlPanel() {
             .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
             .setCustomId('temp_rename')
-            .setLabel('Cambiar Nombre')
+            .setLabel('Nombre')
             .setEmoji('✏️')
             .setStyle(ButtonStyle.Primary)
     );
 
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
+            .setCustomId('temp_trust')
+            .setLabel('Dar Trust')
+            .setEmoji('⭐')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId('temp_untrust')
+            .setLabel('Quitar Trust')
+            .setEmoji('🚫')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
             .setCustomId('temp_limit')
-            .setLabel('Límite Usuarios')
+            .setLabel('Límite')
             .setEmoji('👥')
             .setStyle(ButtonStyle.Secondary)
     );
@@ -130,7 +141,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     // 1. USUARIO ENTRA AL CANAL CREADOR DE TEMPVOICE
     if (newState.channel && newState.channel.name.toLowerCase() === TEMP_VOICE_CREATOR_NAME.toLowerCase()) {
         
-        // REQUISITO: Solo los usuarios con el rol 'trusted' pueden crear un TempVoice
         const hasTrustedRole = member.roles.cache.some(role => role.name.toLowerCase() === ROLE_TRUSTED_NAME.toLowerCase());
 
         if (!hasTrustedRole) {
@@ -145,7 +155,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
         const verifiedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
 
-        // Configuración de Permisos iniciales
         const permissionOverwrites = [
             {
                 id: guild.roles.everyone.id,
@@ -176,19 +185,19 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             const category = newState.channel.parent;
             const tempChannel = await guild.channels.create({
                 name: `🔊 Sala de ${member.displayName}`,
-                type: 2, // GUILD_VOICE
+                type: 2,
                 parent: category ? category.id : null,
                 permissionOverwrites: permissionOverwrites,
                 reason: `TempVoice creado por ${member.user.tag}`
             });
 
-            // Enviar panel con botones de control dentro del chat de texto del canal de voz
             const panelData = buildVoiceControlPanel();
             const controlMessage = await tempChannel.send(panelData);
 
             activeTempChannels.set(tempChannel.id, {
                 ownerId: member.id,
-                controlMsgId: controlMessage.id
+                controlMsgId: controlMessage.id,
+                trustedUsers: new Set()
             });
 
             await newState.setChannel(tempChannel);
@@ -199,26 +208,33 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         }
     }
 
-    // 2. USUARIO ENTRA A UN CANAL TEMPORAL BLOQUEADO (Eyectar incluso si tiene permisos de Admin)
+    // 2. CONTROL DE ENTRADA A CANALES TEMPORALES
     if (newState.channel && activeTempChannels.has(newState.channel.id)) {
         const channelData = activeTempChannels.get(newState.channel.id);
         const channel = newState.channel;
         
-        // Si el usuario no es el dueño de la sala
+        // Si el usuario NO es el dueño de la sala
         if (member.id !== channelData.ownerId) {
-            // Verificar si el canal está bloqueado (Connect denegado para @everyone)
             const everyoneOverwrite = channel.permissionOverwrites.cache.get(guild.roles.everyone.id);
             const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
 
+            const isTrustedUser = channelData.trustedUsers.has(member.id);
+
+            // SI EL CANAL ESTÁ BLOQUEADO (PRIVADO):
             if (isLocked) {
-                try {
-                    await newState.disconnect();
-                    console.log(`[TEMPVOICE] ${member.user.tag} fue eyectado de la sala bloqueada de <@${channelData.ownerId}>.`);
-                } catch (err) {
-                    console.error('[TEMPVOICE] Error desconectando usuario de canal bloqueado:', err.message);
+                // Eyectar si NO está en la lista de Trust de la sala
+                if (!isTrustedUser) {
+                    try {
+                        await newState.disconnect();
+                        console.log(`[TEMPVOICE] ${member.user.tag} (Admin/User) fue eyectado de la sala BLOQUEADA de <@${channelData.ownerId}> por no tener Trust.`);
+                    } catch (err) {
+                        console.error('[TEMPVOICE] Error desconectando usuario de canal bloqueado:', err.message);
+                    }
+                    return;
                 }
-                return;
-            }
+            } 
+            // SI EL CANAL ESTÁ PÚBLICO (DESBLOQUEADO):
+            // Los Admins y usuarios verificados pueden estar y entrar libremente SIN ser eyectados.
         }
     }
 
@@ -235,14 +251,12 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             }
         }
     }
-
 });
 
 // ==========================================
 // 🕹️ INTERACCIÓN CON BOTONES Y MODALES
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
-    // Manejar Botones
     if (interaction.isButton()) {
         const channel = interaction.channel;
         if (!channel || !activeTempChannels.has(channel.id)) {
@@ -251,7 +265,6 @@ client.on('interactionCreate', async (interaction) => {
 
         const channelData = activeTempChannels.get(channel.id);
 
-        // Verificar si quien pulsa es el dueño de la sala o Administrador
         if (interaction.user.id !== channelData.ownerId && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return interaction.reply({ content: '❌ Solo el creador de esta sala puede usar estos botones.', ephemeral: true });
         }
@@ -264,22 +277,64 @@ client.on('interactionCreate', async (interaction) => {
             if (verifiedRole) {
                 await channel.permissionOverwrites.edit(verifiedRole.id, { Connect: false });
             }
+
+            // Eyectar a los usuarios presentes que no sean el dueño ni estén en la lista Trust
+            channel.members.forEach(async (m) => {
+                if (m.id !== channelData.ownerId && !channelData.trustedUsers.has(m.id)) {
+                    try { await m.voice.disconnect(); } catch (e) {}
+                }
+            });
+
             return interaction.reply({ 
-                content: '🔒 **Sala bloqueada.** Nadie nuevo podrá unirse.\n*(Nota de Discord: Los administradores del servidor por arquitectura del propio Discord siempre tienen el permiso "Administrator" que bypassea las restricciones de canales).*', 
+                content: '🔒 **Sala BLOQUEADA.** Ahora es totalmente privada. Solo tú y las personas con ⭐ Trust podrán entrar.', 
                 ephemeral: true 
             });
         }
 
-
-        // Botón Desbloquear (Público para verificados)
+        // Botón Desbloquear (Público para verificados y admins)
         if (interaction.customId === 'temp_unlock') {
+            await channel.permissionOverwrites.edit(interaction.guild.roles.everyone.id, { Connect: null });
             if (verifiedRole) {
                 await channel.permissionOverwrites.edit(verifiedRole.id, { Connect: true, ViewChannel: true });
             }
-            return interaction.reply({ content: '🔓 **Sala desbloqueada.** Los usuarios verificados pueden entrar de nuevo.', ephemeral: true });
+            return interaction.reply({ content: '🔓 **Sala PÚBLICA.** Los usuarios verificados y administradores pueden unirse libremente.', ephemeral: true });
         }
 
-        // Botón Cambiar Nombre (Abre Modal)
+        // Botón Dar Trust (Pedir ID / Mención)
+        if (interaction.customId === 'temp_trust') {
+            const modal = new ModalBuilder()
+                .setCustomId('modal_temp_trust')
+                .setTitle('Dar Trust a un usuario');
+
+            const userInput = new TextInputBuilder()
+                .setCustomId('input_trust_user')
+                .setLabel('ID de Usuario o Tag de Discord')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Ej: 123456789012345678 o nombre')
+                .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(userInput));
+            return interaction.showModal(modal);
+        }
+
+        // Botón Quitar Trust
+        if (interaction.customId === 'temp_untrust') {
+            const modal = new ModalBuilder()
+                .setCustomId('modal_temp_untrust')
+                .setTitle('Quitar Trust a un usuario');
+
+            const userInput = new TextInputBuilder()
+                .setCustomId('input_untrust_user')
+                .setLabel('ID de Usuario a revocar')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Ej: 123456789012345678')
+                .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(userInput));
+            return interaction.showModal(modal);
+        }
+
+        // Botón Cambiar Nombre
         if (interaction.customId === 'temp_rename') {
             const modal = new ModalBuilder()
                 .setCustomId('modal_temp_rename')
@@ -297,7 +352,7 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.showModal(modal);
         }
 
-        // Botón Límite de Usuarios (Abre Modal)
+        // Botón Límite de Usuarios
         if (interaction.customId === 'temp_limit') {
             const modal = new ModalBuilder()
                 .setCustomId('modal_temp_limit')
@@ -321,6 +376,47 @@ client.on('interactionCreate', async (interaction) => {
         const channel = interaction.channel;
         if (!channel || !activeTempChannels.has(channel.id)) return;
 
+        const channelData = activeTempChannels.get(channel.id);
+
+        // Modal Dar Trust
+        if (interaction.customId === 'modal_temp_trust') {
+            const targetInput = interaction.fields.getTextInputValue('input_trust_user').trim().replace(/[<@!>]/g, '');
+            try {
+                const targetMember = await interaction.guild.members.fetch(targetInput);
+                if (targetMember) {
+                    channelData.trustedUsers.add(targetMember.id);
+                    await channel.permissionOverwrites.edit(targetMember.id, { Connect: true, ViewChannel: true });
+                    return interaction.reply({ content: `⭐ Has otorgado **Trust** a **${targetMember.user.tag}**. Ahora puede entrar a tu sala aunque esté privada.`, ephemeral: true });
+                }
+            } catch (e) {
+                return interaction.reply({ content: '❌ No se encontró ningún usuario con ese ID en el servidor.', ephemeral: true });
+            }
+        }
+
+        // Modal Quitar Trust
+        if (interaction.customId === 'modal_temp_untrust') {
+            const targetInput = interaction.fields.getTextInputValue('input_untrust_user').trim().replace(/[<@!>]/g, '');
+            if (channelData.trustedUsers.has(targetInput)) {
+                channelData.trustedUsers.delete(targetInput);
+                await channel.permissionOverwrites.delete(targetInput);
+
+                // Si está dentro de la sala y está bloqueada, desconectarlo
+                const everyoneOverwrite = channel.permissionOverwrites.cache.get(interaction.guild.roles.everyone.id);
+                const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
+                
+                if (isLocked) {
+                    const memberInVoice = channel.members.get(targetInput);
+                    if (memberInVoice) {
+                        try { await memberInVoice.voice.disconnect(); } catch (err) {}
+                    }
+                }
+
+                return interaction.reply({ content: `🚫 Has revocado el **Trust** a <@${targetInput}>.`, ephemeral: true });
+            } else {
+                return interaction.reply({ content: '❌ Ese usuario no está en tu lista de Trust.', ephemeral: true });
+            }
+        }
+
         // Modal Cambiar Nombre
         if (interaction.customId === 'modal_temp_rename') {
             const newName = interaction.fields.getTextInputValue('input_temp_name');
@@ -342,6 +438,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 });
+
 
 client.on('messageCreate', async (message) => {
     if (message.content.toLowerCase() === '!nuke') {
