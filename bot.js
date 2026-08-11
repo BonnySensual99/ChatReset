@@ -457,13 +457,41 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('messageCreate', async (message) => {
     if (message.content.toLowerCase() === '!nuke') {
-        if (!message.member.permissions.has('Administrator')) {
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return message.reply('❌ Necesitas permisos de Administrador para usar este comando.');
         }
-        await message.reply('⚡ Ejecutando prueba de nuke manual...');
-        await nukeAndResetChannel();
+
+        const channelToNuke = message.channel;
+
+        if (!channelToNuke.isTextBased() || channelToNuke.isThread()) {
+            return message.reply('❌ Este comando solo se puede usar en canales de texto estándar.');
+        }
+
+        try {
+            console.log(`[${new Date().toLocaleString()}] !nuke ejecutado manualmente en "${channelToNuke.name}" por ${message.author.tag}...`);
+
+            const position = channelToNuke.position;
+
+            const newChannel = await channelToNuke.clone({
+                reason: `Nuke manual ejecutado por ${message.author.tag}`
+            });
+
+            await newChannel.setPosition(position);
+
+            await newChannel.send({
+                content: '🧹 **Este canal ha sido limpiado manualmente.** El historial anterior ha sido eliminado.'
+            });
+
+            await channelToNuke.delete(`Nuke manual ejecutado por ${message.author.tag}`);
+
+            console.log(`[ÉXITO] Canal "${newChannel.name}" reiniciado con !nuke.`);
+
+        } catch (error) {
+            console.error('[ERROR] Hubo un fallo al intentar ejecutar !nuke:', error);
+        }
     }
 });
+
 
 client.once('ready', () => {
     console.log(`========================================`);
