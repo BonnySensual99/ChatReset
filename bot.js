@@ -1,24 +1,30 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
 const cron = require('node-cron');
 require('dotenv').config();
 
-// Crear el cliente del bot con intenciones de Servidores y Mensajes (para pruebas)
+// Crear el cliente del bot con intenciones necesarias para Canales, Mensajes y Estados de Voz
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
-// Configuración de variables
+// Configuración de variables del canal diario
 const TARGET_CHANNEL_NAME = process.env.CHANNEL_NAME || 'chat-diario';
 const GUILD_ID = process.env.GUILD_ID;
 const TIMEZONE = process.env.TIMEZONE || 'Europe/Madrid';
-
-// Expresión Cron (por defecto 00:00 -> '0 0 * * *')
-// Ejemplo para minutos específicos: '*/5 * * * *' (cada 5 min) o '30 14 * * *' (a las 14:30)
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 0 * * *';
+
+// Configuración de TempVoice y Roles
+const TEMP_VOICE_CREATOR_NAME = process.env.TEMP_VOICE_CREATOR_NAME || '➕ Crear Sala';
+const ROLE_TRUSTED_NAME = process.env.ROLE_TRUSTED_NAME || 'trusted';
+const ROLE_VERIFIED_NAME = process.env.ROLE_VERIFIED_NAME || 'verified';
+
+// Mapa para rastrear los canales de voz temporales creados: ID_Canal -> ID_Creador
+const activeTempChannels = new Map();
 
 async function nukeAndResetChannel() {
     try {
@@ -32,7 +38,7 @@ async function nukeAndResetChannel() {
         }
 
         if (!channel) {
-            console.error(`[ERROR] No se encontró ningún canal con el nombre: "${TARGET_CHANNEL_NAME}"`);
+            console.error(`[ERROR] No se encontró ningún canal de texto con el nombre: "${TARGET_CHANNEL_NAME}"`);
             return;
         }
 
@@ -44,17 +50,13 @@ async function nukeAndResetChannel() {
             reason: 'Reinicio de canal para privacidad e historial limpio.'
         });
 
-        // Restablecer la posición del nuevo canal
         await newChannel.setPosition(position);
 
-        // Enviar mensaje informativo en el canal recién clonado
         await newChannel.send({
             content: '🧹 **Este canal ha sido limpiado automáticamente.** El historial anterior ha sido eliminado.'
         });
 
-        // 2. Eliminar el canal viejo
         await channel.delete('Reinicio de canal.');
-
 
         console.log(`[ÉXITO] Canal "${TARGET_CHANNEL_NAME}" reiniciado con éxito.`);
 
@@ -63,8 +65,105 @@ async function nukeAndResetChannel() {
     }
 }
 
+// ==========================================
+// 🔊 LÓGICA DE TEMPVOICE (CANALES TEMPORALES)
+// ==========================================
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const member = newState.member;
+    if (!member || member.user.bot) return;
+
+    const guild = newState.guild;
+
+    // 1. USUARIO ENTRA AL CANAL CREADOR DE TEMPVOICE
+    if (newState.channel && newState.channel.name.toLowerCase() === TEMP_VOICE_CREATOR_NAME.toLowerCase()) {
+        
+        // REQUISITO: Solo los usuarios con el rol 'trusted' pueden crear un TempVoice
+        const hasTrustedRole = member.roles.cache.some(role => role.name.toLowerCase() === ROLE_TRUSTED_NAME.toLowerCase());
+
+        if (!hasTrustedRole) {
+            try {
+                // Desconectar al usuario del canal creador si no tiene el rol trusted
+                await newState.disconnect();
+                console.log(`[TEMPVOICE] ${member.user.tag} intentó crear canal pero no tiene el rol '${ROLE_TRUSTED_NAME}'.`);
+            } catch (err) {
+                console.error('[TEMPVOICE] Error desconectando usuario sin permisos:', err.message);
+            }
+            return;
+        }
+
+        // Buscar los roles para configurar permisos
+        const verifiedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
+        const trustedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_TRUSTED_NAME.toLowerCase());
+
+        // Configuración de Permisos
+        const permissionOverwrites = [
+            {
+                id: guild.roles.everyone.id,
+                deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect] // Oculto e inaccesible para todos por defecto
+            }
+        ];
+
+        // REQUISITO: Que los usuarios verificados ('verified') puedan ver y entrar al canal
+        if (verifiedRole) {
+            permissionOverwrites.push({
+                id: verifiedRole.id,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
+            });
+        } else {
+            console.warn(`[TEMPVOICE] Advertencia: No se encontró el rol '${ROLE_VERIFIED_NAME}' en el servidor.`);
+        }
+
+        // Otorgar permisos completos al creador del canal (trusted)
+        permissionOverwrites.push({
+            id: member.id,
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.Connect,
+                PermissionFlagsBits.Speak,
+                PermissionFlagsBits.MuteMembers,
+                PermissionFlagsBits.DeafenMembers,
+                PermissionFlagsBits.MoveMembers
+            ]
+        });
+
+        try {
+            // Crear el canal de voz temporal en la misma categoría si existe
+            const category = newState.channel.parent;
+            const tempChannel = await guild.channels.create({
+                name: `🔊 Sala de ${member.displayName}`,
+                type: 2, // GUILD_VOICE
+                parent: category ? category.id : null,
+                permissionOverwrites: permissionOverwrites,
+                reason: `TempVoice creado por ${member.user.tag}`
+            });
+
+            activeTempChannels.set(tempChannel.id, member.id);
+
+            // Mover inmediatamente al usuario al nuevo canal creado
+            await newState.setChannel(tempChannel);
+            console.log(`[TEMPVOICE] Canal "${tempChannel.name}" creado con éxito para ${member.user.tag}.`);
+
+        } catch (error) {
+            console.error('[TEMPVOICE] Error al crear canal de voz temporal:', error);
+        }
+    }
+
+    // 2. USUARIO SALE DE UN CANAL Y EL CANAL SE QUEDA VACÍO -> BORRAR CANAL
+    if (oldState.channel && activeTempChannels.has(oldState.channel.id)) {
+        const channelToCheck = oldState.channel;
+        if (channelToCheck.members.size === 0) {
+            try {
+                activeTempChannels.delete(channelToCheck.id);
+                await channelToCheck.delete('TempVoice vacío eliminado automáticamente.');
+                console.log(`[TEMPVOICE] Canal vaciado "${channelToCheck.name}" eliminado automáticamente.`);
+            } catch (err) {
+                console.error('[TEMPVOICE] Error eliminando canal temporal vacío:', err.message);
+            }
+        }
+    }
+});
+
 client.on('messageCreate', async (message) => {
-    // Comando manual para probar la limpieza inmediatamente en Discord (!nuke)
     if (message.content.toLowerCase() === '!nuke') {
         if (!message.member.permissions.has('Administrator')) {
             return message.reply('❌ Necesitas permisos de Administrador para usar este comando.');
@@ -79,13 +178,12 @@ client.once('ready', () => {
     console.log(`Bot conectado exitosamente como: ${client.user.tag}`);
     console.log(`Zona horaria: ${TIMEZONE}`);
     console.log(`Horario programado (Cron): ${CRON_SCHEDULE}`);
-    console.log(`💡 TRUCO DE PRUEBAS: Escribe "!nuke" en cualquier canal para probar la limpieza de inmediato.`);
+    console.log(`🔊 TempVoice Activo: Creador "${TEMP_VOICE_CREATOR_NAME}"`);
+    console.log(`   - Permiso de Creación: Rol '${ROLE_TRUSTED_NAME}'`);
+    console.log(`   - Permiso de Visualización: Rol '${ROLE_VERIFIED_NAME}' (Double Counter)`);
     console.log(`========================================`);
 
-    // Permitir expresiones de 5 o 6 campos en node-cron (ej: '*/5 * * * * *' para 5 segundos)
-    const cronSchedule = process.env.CRON_SCHEDULE || '0 0 * * *';
-
-    cron.schedule(cronSchedule, () => {
+    cron.schedule(CRON_SCHEDULE, () => {
         console.log('⏰ Ejecutando limpieza programada...');
         nukeAndResetChannel();
     }, {
@@ -95,5 +193,6 @@ client.once('ready', () => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
 
 
