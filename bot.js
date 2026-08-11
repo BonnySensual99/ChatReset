@@ -199,7 +199,30 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         }
     }
 
-    // 2. USUARIO SALE DE UN CANAL Y EL CANAL SE QUEDA VACÍO -> BORRAR CANAL
+    // 2. USUARIO ENTRA A UN CANAL TEMPORAL BLOQUEADO (Eyectar incluso si tiene permisos de Admin)
+    if (newState.channel && activeTempChannels.has(newState.channel.id)) {
+        const channelData = activeTempChannels.get(newState.channel.id);
+        const channel = newState.channel;
+        
+        // Si el usuario no es el dueño de la sala
+        if (member.id !== channelData.ownerId) {
+            // Verificar si el canal está bloqueado (Connect denegado para @everyone)
+            const everyoneOverwrite = channel.permissionOverwrites.cache.get(guild.roles.everyone.id);
+            const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
+
+            if (isLocked) {
+                try {
+                    await newState.disconnect();
+                    console.log(`[TEMPVOICE] ${member.user.tag} fue eyectado de la sala bloqueada de <@${channelData.ownerId}>.`);
+                } catch (err) {
+                    console.error('[TEMPVOICE] Error desconectando usuario de canal bloqueado:', err.message);
+                }
+                return;
+            }
+        }
+    }
+
+    // 3. USUARIO SALE DE UN CANAL Y EL CANAL SE QUEDA VACÍO -> BORRAR CANAL
     if (oldState.channel && activeTempChannels.has(oldState.channel.id)) {
         const channelToCheck = oldState.channel;
         if (channelToCheck.members.size === 0) {
@@ -212,6 +235,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             }
         }
     }
+
 });
 
 // ==========================================
@@ -240,8 +264,12 @@ client.on('interactionCreate', async (interaction) => {
             if (verifiedRole) {
                 await channel.permissionOverwrites.edit(verifiedRole.id, { Connect: false });
             }
-            return interaction.reply({ content: '🔒 **Sala bloqueada.** Nadie nuevo podrá unirse a menos que lo permitas.', ephemeral: true });
+            return interaction.reply({ 
+                content: '🔒 **Sala bloqueada.** Nadie nuevo podrá unirse.\n*(Nota de Discord: Los administradores del servidor por arquitectura del propio Discord siempre tienen el permiso "Administrator" que bypassea las restricciones de canales).*', 
+                ephemeral: true 
+            });
         }
+
 
         // Botón Desbloquear (Público para verificados)
         if (interaction.customId === 'temp_unlock') {
