@@ -78,21 +78,34 @@ async function nukeAndResetChannel() {
     }
 }
 
-// Función auxiliar para construir la botonera del panel de control de voz
-function buildVoiceControlPanel() {
+// Función auxiliar para construir la botonera del panel de control de voz con diseño elegante y premium
+function buildVoiceControlPanel(ownerDisplayName) {
     const embed = new EmbedBuilder()
-        .setTitle('⚙️ Panel de Control de Tu Sala de Voz')
-        .setDescription('Usa los botones de abajo para administrar y personalizar tu canal temporal.')
+        .setTitle('✨ CENTRO DE CONTROL DE SALA TEMPORAL')
+        .setDescription(`¡Hola **${ownerDisplayName}**! Bienvenido a tu panel de administración. Usa las herramientas interactivas de abajo para gestionar la privacidad, visibilidad y accesos a tu sala.`)
         .setColor('#5865F2')
+        .setThumbnail('https://cdn-icons-png.flaticon.com/512/565/565547.png')
         .addFields(
-            { name: '🔒 / 🔓 Privacidad', value: 'Bloquea o desbloquea tu sala', inline: true },
-            { name: '👁️ / 🙈 Visibilidad', value: 'Haz visible u oculta tu sala', inline: true },
-            { name: '✏️ Nombre', value: 'Cambia el nombre', inline: true },
-            { name: '👥 Límite', value: 'Límite de usuarios', inline: true },
-            { name: '⭐ Trust / Untrust', value: 'Permite/prohíbe el acceso a usuarios específicos', inline: false }
+            { 
+                name: '🔒  Privacidad & Acceso', 
+                value: '> 🔒 **Bloquear:** Cierra el canal (solo creador/trusted).\n> 🔓 **Desbloquear:** Abre la sala a usuarios verificados.', 
+                inline: false 
+            },
+            { 
+                name: '👁️  Visibilidad en el Servidor', 
+                value: '> 🙈 **Ocultar:** Esconde la sala de la lista de canales.\n> 👁️ **Mostrar:** Vuelve a hacer visible la sala.', 
+                inline: false 
+            },
+            { 
+                name: '⚙️  Ajustes & Lista VIP', 
+                value: '> ✏️ **Nombre:** Renombra tu sala de voz.\n> ⭐ **Dar Trust:** Autoriza a un usuario específico.\n> 🚫 **Quitar Trust:** Revoca el acceso a un usuario.\n> 👥 **Límite:** Ajusta el cupo máximo de personas.', 
+                inline: false 
+            }
         )
-        .setFooter({ text: 'Solo el dueño de la sala puede usar estos botones' });
+        .setFooter({ text: '🛡️ Sistema de Gestión de Voz Privada • Solo el creador tiene acceso', iconURL: 'https://cdn-icons-png.flaticon.com/512/1067/1067735.png' })
+        .setTimestamp();
 
+    // Fila 1: Control de Privacidad y Visibilidad
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('temp_lock')
@@ -116,6 +129,7 @@ function buildVoiceControlPanel() {
             .setStyle(ButtonStyle.Secondary)
     );
 
+    // Fila 2: Personalización y Sistema de Trust
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('temp_rename')
@@ -126,21 +140,22 @@ function buildVoiceControlPanel() {
             .setCustomId('temp_trust')
             .setLabel('Dar Trust')
             .setEmoji('⭐')
-            .setStyle(ButtonStyle.Secondary),
+            .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
             .setCustomId('temp_untrust')
             .setLabel('Quitar Trust')
             .setEmoji('🚫')
-            .setStyle(ButtonStyle.Secondary),
+            .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
             .setCustomId('temp_limit')
             .setLabel('Límite')
             .setEmoji('👥')
-            .setStyle(ButtonStyle.Secondary)
+            .setStyle(ButtonStyle.Primary)
     );
 
     return { embeds: [embed], components: [row1, row2] };
 }
+
 
 
 // ==========================================
@@ -205,7 +220,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
                 reason: `TempVoice creado por ${member.user.tag}`
             });
 
-            const panelData = buildVoiceControlPanel();
+            const panelData = buildVoiceControlPanel(member.displayName);
             const controlMessage = await tempChannel.send(panelData);
 
             activeTempChannels.set(tempChannel.id, {
