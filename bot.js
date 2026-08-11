@@ -8,8 +8,10 @@ const {
     EmbedBuilder,
     ModalBuilder,
     TextInputBuilder,
-    TextInputStyle
+    TextInputStyle,
+    UserSelectMenuBuilder
 } = require('discord.js');
+
 const cron = require('node-cron');
 require('dotenv').config();
 
@@ -300,39 +302,42 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: '🔓 **Sala PÚBLICA.** Los usuarios verificados y administradores pueden unirse libremente.', ephemeral: true });
         }
 
-        // Botón Dar Trust (Pedir ID / Mención)
+        // Botón Dar Trust (Desplegable interactivo de usuarios de Discord)
         if (interaction.customId === 'temp_trust') {
-            const modal = new ModalBuilder()
-                .setCustomId('modal_temp_trust')
-                .setTitle('Dar Trust a un usuario');
+            const userSelect = new UserSelectMenuBuilder()
+                .setCustomId('select_temp_trust')
+                .setPlaceholder('Selecciona el usuario para darle Trust...')
+                .setMinValues(1)
+                .setMaxValues(1);
 
-            const userInput = new TextInputBuilder()
-                .setCustomId('input_trust_user')
-                .setLabel('ID de Usuario o Tag de Discord')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('Ej: 123456789012345678 o nombre')
-                .setRequired(true);
-
-            modal.addComponents(new ActionRowBuilder().addComponents(userInput));
-            return interaction.showModal(modal);
+            const row = new ActionRowBuilder().addComponents(userSelect);
+            return interaction.reply({
+                content: '⭐ **Selecciona el usuario al que deseas dar permisos (Trust):**',
+                components: [row],
+                ephemeral: true
+            });
         }
 
-        // Botón Quitar Trust
+        // Botón Quitar Trust (Desplegable interactivo)
         if (interaction.customId === 'temp_untrust') {
-            const modal = new ModalBuilder()
-                .setCustomId('modal_temp_untrust')
-                .setTitle('Quitar Trust a un usuario');
+            if (channelData.trustedUsers.size === 0) {
+                return interaction.reply({ content: '❌ Tu lista de Trust está actualmente vacía.', ephemeral: true });
+            }
 
-            const userInput = new TextInputBuilder()
-                .setCustomId('input_untrust_user')
-                .setLabel('ID de Usuario a revocar')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('Ej: 123456789012345678')
-                .setRequired(true);
+            const userSelect = new UserSelectMenuBuilder()
+                .setCustomId('select_temp_untrust')
+                .setPlaceholder('Selecciona el usuario para quitarle el Trust...')
+                .setMinValues(1)
+                .setMaxValues(1);
 
-            modal.addComponents(new ActionRowBuilder().addComponents(userInput));
-            return interaction.showModal(modal);
+            const row = new ActionRowBuilder().addComponents(userSelect);
+            return interaction.reply({
+                content: '🚫 **Selecciona el usuario al que deseas revocar el Trust:**',
+                components: [row],
+                ephemeral: true
+            });
         }
+
 
         // Botón Cambiar Nombre
         if (interaction.customId === 'temp_rename') {
@@ -371,51 +376,60 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    // Manejar Desplegable de Selección de Usuarios (UserSelectMenu)
+    if (interaction.isUserSelectMenu()) {
+        const channel = interaction.channel;
+        if (!channel || !activeTempChannels.has(channel.id)) return;
+
+        const channelData = activeTempChannels.get(channel.id);
+        const selectedUserId = interaction.values[0];
+        const selectedUser = interaction.users.get(selectedUserId);
+
+        // Selección para Dar Trust
+        if (interaction.customId === 'select_temp_trust') {
+            channelData.trustedUsers.add(selectedUserId);
+            await channel.permissionOverwrites.edit(selectedUserId, { Connect: true, ViewChannel: true });
+            return interaction.update({
+                content: `⭐ Has otorgado **Trust** a **${selectedUser ? selectedUser.tag : selectedUserId}**. Ahora puede entrar a tu sala aunque esté privada.`,
+                components: []
+            });
+        }
+
+        // Selección para Quitar Trust
+        if (interaction.customId === 'select_temp_untrust') {
+            if (channelData.trustedUsers.has(selectedUserId)) {
+                channelData.trustedUsers.delete(selectedUserId);
+                await channel.permissionOverwrites.delete(selectedUserId);
+
+                const everyoneOverwrite = channel.permissionOverwrites.cache.get(interaction.guild.roles.everyone.id);
+                const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
+                
+                if (isLocked) {
+                    const memberInVoice = channel.members.get(selectedUserId);
+                    if (memberInVoice) {
+                        try { await memberInVoice.voice.disconnect(); } catch (err) {}
+                    }
+                }
+
+                return interaction.update({
+                    content: `🚫 Has revocado el **Trust** a **${selectedUser ? selectedUser.tag : selectedUserId}**.`,
+                    components: []
+                });
+            } else {
+                return interaction.update({
+                    content: `❌ **${selectedUser ? selectedUser.tag : selectedUserId}** no estaba en tu lista de Trust.`,
+                    components: []
+                });
+            }
+        }
+    }
+
     // Manejar Respuestas de Modales
     if (interaction.isModalSubmit()) {
         const channel = interaction.channel;
         if (!channel || !activeTempChannels.has(channel.id)) return;
 
         const channelData = activeTempChannels.get(channel.id);
-
-        // Modal Dar Trust
-        if (interaction.customId === 'modal_temp_trust') {
-            const targetInput = interaction.fields.getTextInputValue('input_trust_user').trim().replace(/[<@!>]/g, '');
-            try {
-                const targetMember = await interaction.guild.members.fetch(targetInput);
-                if (targetMember) {
-                    channelData.trustedUsers.add(targetMember.id);
-                    await channel.permissionOverwrites.edit(targetMember.id, { Connect: true, ViewChannel: true });
-                    return interaction.reply({ content: `⭐ Has otorgado **Trust** a **${targetMember.user.tag}**. Ahora puede entrar a tu sala aunque esté privada.`, ephemeral: true });
-                }
-            } catch (e) {
-                return interaction.reply({ content: '❌ No se encontró ningún usuario con ese ID en el servidor.', ephemeral: true });
-            }
-        }
-
-        // Modal Quitar Trust
-        if (interaction.customId === 'modal_temp_untrust') {
-            const targetInput = interaction.fields.getTextInputValue('input_untrust_user').trim().replace(/[<@!>]/g, '');
-            if (channelData.trustedUsers.has(targetInput)) {
-                channelData.trustedUsers.delete(targetInput);
-                await channel.permissionOverwrites.delete(targetInput);
-
-                // Si está dentro de la sala y está bloqueada, desconectarlo
-                const everyoneOverwrite = channel.permissionOverwrites.cache.get(interaction.guild.roles.everyone.id);
-                const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
-                
-                if (isLocked) {
-                    const memberInVoice = channel.members.get(targetInput);
-                    if (memberInVoice) {
-                        try { await memberInVoice.voice.disconnect(); } catch (err) {}
-                    }
-                }
-
-                return interaction.reply({ content: `🚫 Has revocado el **Trust** a <@${targetInput}>.`, ephemeral: true });
-            } else {
-                return interaction.reply({ content: '❌ Ese usuario no está en tu lista de Trust.', ephemeral: true });
-            }
-        }
 
         // Modal Cambiar Nombre
         if (interaction.customId === 'modal_temp_rename') {
@@ -437,6 +451,7 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: `👥 Límite de usuarios establecido en: **${limit === 0 ? 'Sin límite' : limit}**`, ephemeral: true });
         }
     }
+
 });
 
 
