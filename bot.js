@@ -86,6 +86,7 @@ function buildVoiceControlPanel() {
         .setColor('#5865F2')
         .addFields(
             { name: '🔒 / 🔓 Privacidad', value: 'Bloquea o desbloquea tu sala', inline: true },
+            { name: '👁️ / 🙈 Visibilidad', value: 'Haz visible u oculta tu sala', inline: true },
             { name: '✏️ Nombre', value: 'Cambia el nombre', inline: true },
             { name: '👥 Límite', value: 'Límite de usuarios', inline: true },
             { name: '⭐ Trust / Untrust', value: 'Permite/prohíbe el acceso a usuarios específicos', inline: false }
@@ -95,7 +96,7 @@ function buildVoiceControlPanel() {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('temp_lock')
-            .setLabel('Bloquear (Privado)')
+            .setLabel('Bloquear')
             .setEmoji('🔒')
             .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
@@ -104,13 +105,23 @@ function buildVoiceControlPanel() {
             .setEmoji('🔓')
             .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-            .setCustomId('temp_rename')
-            .setLabel('Nombre')
-            .setEmoji('✏️')
-            .setStyle(ButtonStyle.Primary)
+            .setCustomId('temp_hide')
+            .setLabel('Ocultar')
+            .setEmoji('🙈')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId('temp_show')
+            .setLabel('Mostrar')
+            .setEmoji('👁️')
+            .setStyle(ButtonStyle.Secondary)
     );
 
     const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('temp_rename')
+            .setLabel('Nombre')
+            .setEmoji('✏️')
+            .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId('temp_trust')
             .setLabel('Dar Trust')
@@ -130,6 +141,7 @@ function buildVoiceControlPanel() {
 
     return { embeds: [embed], components: [row1, row2] };
 }
+
 
 // ==========================================
 // 🔊 LÓGICA DE TEMPVOICE (CANALES TEMPORALES)
@@ -301,6 +313,26 @@ client.on('interactionCreate', async (interaction) => {
             }
             return interaction.reply({ content: '🔓 **Sala PÚBLICA.** Los usuarios verificados y administradores pueden unirse libremente.', ephemeral: true });
         }
+
+        // Botón Ocultar (Invisible)
+        if (interaction.customId === 'temp_hide') {
+            await channel.permissionOverwrites.edit(interaction.guild.roles.everyone.id, { ViewChannel: false });
+            if (verifiedRole) {
+                await channel.permissionOverwrites.edit(verifiedRole.id, { ViewChannel: false });
+            }
+            return interaction.reply({ content: '🙈 **Sala OCULTA.** Tu canal de voz ahora es totalmente invisible en la lista para los demás usuarios.', ephemeral: true });
+        }
+
+        // Botón Mostrar (Visible)
+        if (interaction.customId === 'temp_show') {
+            if (verifiedRole) {
+                await channel.permissionOverwrites.edit(verifiedRole.id, { ViewChannel: true });
+            } else {
+                await channel.permissionOverwrites.edit(interaction.guild.roles.everyone.id, { ViewChannel: true });
+            }
+            return interaction.reply({ content: '👁️ **Sala VISIBLE.** Tu canal de voz vuelve a aparecer en la lista de canales.', ephemeral: true });
+        }
+
 
         // Botón Dar Trust (Desplegable interactivo de usuarios de Discord)
         if (interaction.customId === 'temp_trust') {
