@@ -1,4 +1,15 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
+const { 
+    Client, 
+    GatewayIntentBits, 
+    PermissionFlagsBits, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle,
+    EmbedBuilder,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
+} = require('discord.js');
 const cron = require('node-cron');
 require('dotenv').config();
 
@@ -23,7 +34,7 @@ const TEMP_VOICE_CREATOR_NAME = process.env.TEMP_VOICE_CREATOR_NAME || '➕ Crea
 const ROLE_TRUSTED_NAME = process.env.ROLE_TRUSTED_NAME || 'trusted';
 const ROLE_VERIFIED_NAME = process.env.ROLE_VERIFIED_NAME || 'verified';
 
-// Mapa para rastrear los canales de voz temporales creados: ID_Canal -> ID_Creador
+// Mapa para rastrear los canales de voz temporales creados: ID_Canal -> { ownerId, controlMsgId }
 const activeTempChannels = new Map();
 
 async function nukeAndResetChannel() {
@@ -65,6 +76,48 @@ async function nukeAndResetChannel() {
     }
 }
 
+// Función auxiliar para construir la botonera del panel de control de voz
+function buildVoiceControlPanel() {
+    const embed = new EmbedBuilder()
+        .setTitle('⚙️ Panel de Control de Tu Sala de Voz')
+        .setDescription('Usa los botones de abajo para administrar y personalizar tu canal temporal.')
+        .setColor('#5865F2')
+        .addFields(
+            { name: '🔒 / 🔓 Privacidad', value: 'Bloquea o desbloquea tu sala', inline: true },
+            { name: '✏️ Nombre', value: 'Cambia el nombre de tu canal', inline: true },
+            { name: '👥 Límite', value: 'Cambia el límite de usuarios', inline: true }
+        )
+        .setFooter({ text: 'Solo el dueño de la sala puede usar estos botones' });
+
+    const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('temp_lock')
+            .setLabel('Bloquear (Privado)')
+            .setEmoji('🔒')
+            .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+            .setCustomId('temp_unlock')
+            .setLabel('Desbloquear')
+            .setEmoji('🔓')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId('temp_rename')
+            .setLabel('Cambiar Nombre')
+            .setEmoji('✏️')
+            .setStyle(ButtonStyle.Primary)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('temp_limit')
+            .setLabel('Límite Usuarios')
+            .setEmoji('👥')
+            .setStyle(ButtonStyle.Secondary)
+    );
+
+    return { embeds: [embed], components: [row1, row2] };
+}
+
 // ==========================================
 // 🔊 LÓGICA DE TEMPVOICE (CANALES TEMPORALES)
 // ==========================================
@@ -82,7 +135,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
         if (!hasTrustedRole) {
             try {
-                // Desconectar al usuario del canal creador si no tiene el rol trusted
                 await newState.disconnect();
                 console.log(`[TEMPVOICE] ${member.user.tag} intentó crear canal pero no tiene el rol '${ROLE_TRUSTED_NAME}'.`);
             } catch (err) {
@@ -91,29 +143,23 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             return;
         }
 
-        // Buscar los roles para configurar permisos
         const verifiedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
-        const trustedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_TRUSTED_NAME.toLowerCase());
 
-        // Configuración de Permisos
+        // Configuración de Permisos iniciales
         const permissionOverwrites = [
             {
                 id: guild.roles.everyone.id,
-                deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect] // Oculto e inaccesible para todos por defecto
+                deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect]
             }
         ];
 
-        // REQUISITO: Que los usuarios verificados ('verified') puedan ver y entrar al canal
         if (verifiedRole) {
             permissionOverwrites.push({
                 id: verifiedRole.id,
                 allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
             });
-        } else {
-            console.warn(`[TEMPVOICE] Advertencia: No se encontró el rol '${ROLE_VERIFIED_NAME}' en el servidor.`);
         }
 
-        // Otorgar permisos completos al creador del canal (trusted)
         permissionOverwrites.push({
             id: member.id,
             allow: [
@@ -127,7 +173,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         });
 
         try {
-            // Crear el canal de voz temporal en la misma categoría si existe
             const category = newState.channel.parent;
             const tempChannel = await guild.channels.create({
                 name: `🔊 Sala de ${member.displayName}`,
@@ -137,9 +182,15 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
                 reason: `TempVoice creado por ${member.user.tag}`
             });
 
-            activeTempChannels.set(tempChannel.id, member.id);
+            // Enviar panel con botones de control dentro del chat de texto del canal de voz
+            const panelData = buildVoiceControlPanel();
+            const controlMessage = await tempChannel.send(panelData);
 
-            // Mover inmediatamente al usuario al nuevo canal creado
+            activeTempChannels.set(tempChannel.id, {
+                ownerId: member.id,
+                controlMsgId: controlMessage.id
+            });
+
             await newState.setChannel(tempChannel);
             console.log(`[TEMPVOICE] Canal "${tempChannel.name}" creado con éxito para ${member.user.tag}.`);
 
@@ -163,6 +214,107 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     }
 });
 
+// ==========================================
+// 🕹️ INTERACCIÓN CON BOTONES Y MODALES
+// ==========================================
+client.on('interactionCreate', async (interaction) => {
+    // Manejar Botones
+    if (interaction.isButton()) {
+        const channel = interaction.channel;
+        if (!channel || !activeTempChannels.has(channel.id)) {
+            return interaction.reply({ content: '❌ Este panel ya no está activo.', ephemeral: true });
+        }
+
+        const channelData = activeTempChannels.get(channel.id);
+
+        // Verificar si quien pulsa es el dueño de la sala o Administrador
+        if (interaction.user.id !== channelData.ownerId && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            return interaction.reply({ content: '❌ Solo el creador de esta sala puede usar estos botones.', ephemeral: true });
+        }
+
+        const verifiedRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
+
+        // Botón Bloquear (Privado)
+        if (interaction.customId === 'temp_lock') {
+            await channel.permissionOverwrites.edit(interaction.guild.roles.everyone.id, { Connect: false });
+            if (verifiedRole) {
+                await channel.permissionOverwrites.edit(verifiedRole.id, { Connect: false });
+            }
+            return interaction.reply({ content: '🔒 **Sala bloqueada.** Nadie nuevo podrá unirse a menos que lo permitas.', ephemeral: true });
+        }
+
+        // Botón Desbloquear (Público para verificados)
+        if (interaction.customId === 'temp_unlock') {
+            if (verifiedRole) {
+                await channel.permissionOverwrites.edit(verifiedRole.id, { Connect: true, ViewChannel: true });
+            }
+            return interaction.reply({ content: '🔓 **Sala desbloqueada.** Los usuarios verificados pueden entrar de nuevo.', ephemeral: true });
+        }
+
+        // Botón Cambiar Nombre (Abre Modal)
+        if (interaction.customId === 'temp_rename') {
+            const modal = new ModalBuilder()
+                .setCustomId('modal_temp_rename')
+                .setTitle('Cambiar Nombre de la Sala');
+
+            const nameInput = new TextInputBuilder()
+                .setCustomId('input_temp_name')
+                .setLabel('Nuevo nombre para el canal')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Ej: Sala de Charlas')
+                .setMaxLength(30)
+                .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+            return interaction.showModal(modal);
+        }
+
+        // Botón Límite de Usuarios (Abre Modal)
+        if (interaction.customId === 'temp_limit') {
+            const modal = new ModalBuilder()
+                .setCustomId('modal_temp_limit')
+                .setTitle('Límite de Usuarios');
+
+            const limitInput = new TextInputBuilder()
+                .setCustomId('input_temp_limit')
+                .setLabel('Número máximo de usuarios (0 para ilimitado)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Ej: 5')
+                .setMaxLength(2)
+                .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(limitInput));
+            return interaction.showModal(modal);
+        }
+    }
+
+    // Manejar Respuestas de Modales
+    if (interaction.isModalSubmit()) {
+        const channel = interaction.channel;
+        if (!channel || !activeTempChannels.has(channel.id)) return;
+
+        // Modal Cambiar Nombre
+        if (interaction.customId === 'modal_temp_rename') {
+            const newName = interaction.fields.getTextInputValue('input_temp_name');
+            await channel.setName(`🔊 ${newName}`);
+            return interaction.reply({ content: `✏️ Nombre del canal cambiado a: **🔊 ${newName}**`, ephemeral: true });
+        }
+
+        // Modal Límite de Usuarios
+        if (interaction.customId === 'modal_temp_limit') {
+            const limitStr = interaction.fields.getTextInputValue('input_temp_limit');
+            const limit = parseInt(limitStr);
+
+            if (isNaN(limit) || limit < 0 || limit > 99) {
+                return interaction.reply({ content: '❌ Por favor ingresa un número válido entre 0 y 99.', ephemeral: true });
+            }
+
+            await channel.setUserLimit(limit);
+            return interaction.reply({ content: `👥 Límite de usuarios establecido en: **${limit === 0 ? 'Sin límite' : limit}**`, ephemeral: true });
+        }
+    }
+});
+
 client.on('messageCreate', async (message) => {
     if (message.content.toLowerCase() === '!nuke') {
         if (!message.member.permissions.has('Administrator')) {
@@ -178,9 +330,7 @@ client.once('ready', () => {
     console.log(`Bot conectado exitosamente como: ${client.user.tag}`);
     console.log(`Zona horaria: ${TIMEZONE}`);
     console.log(`Horario programado (Cron): ${CRON_SCHEDULE}`);
-    console.log(`🔊 TempVoice Activo: Creador "${TEMP_VOICE_CREATOR_NAME}"`);
-    console.log(`   - Permiso de Creación: Rol '${ROLE_TRUSTED_NAME}'`);
-    console.log(`   - Permiso de Visualización: Rol '${ROLE_VERIFIED_NAME}' (Double Counter)`);
+    console.log(`🔊 TempVoice Activo con PANEL DE BOTONES INTERACTIVO`);
     console.log(`========================================`);
 
     cron.schedule(CRON_SCHEDULE, () => {
@@ -193,6 +343,7 @@ client.once('ready', () => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
 
 
 
