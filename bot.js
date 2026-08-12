@@ -507,6 +507,33 @@ client.on('interactionCreate', async (interaction) => {
 
 
 client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+
+    // Comando !join (Notificar entrada a la cuenta de Valorant)
+    if (message.content.toLowerCase() === '!join') {
+        try {
+            // Eliminar el mensaje del usuario (!join) para mantener limpio el canal
+            try { await message.delete(); } catch (e) {}
+
+            // Obtener la hora actual formateada en la zona horaria del bot (HH:MM)
+            const hora = new Date().toLocaleTimeString('es-ES', { 
+                timeZone: TIMEZONE, 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false 
+            });
+
+            // Enviar el aviso con el formato exacto: [hora] @usuario joined in the account.
+            await message.channel.send(`[${hora}] <@${message.author.id}> joined in the account.`);
+            console.log(`[VALORANT] ${message.author.tag} notificó entrada a la cuenta a las ${hora}.`);
+
+        } catch (error) {
+            console.error('[ERROR] Fallo al procesar el comando !join:', error);
+        }
+        return;
+    }
+
+    // Comando !nuke (Limpieza manual de canal)
     if (message.content.toLowerCase() === '!nuke') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return message.reply('❌ Necesitas permisos de Administrador para usar este comando.');
@@ -542,6 +569,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 });
+
 
 
 client.once('ready', () => {
