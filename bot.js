@@ -184,20 +184,22 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
         const verifiedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
 
+        // Configuración de Permisos iniciales: PÚBLICO POR DEFECTO para verificados
         const permissionOverwrites = [
             {
                 id: guild.roles.everyone.id,
-                deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect]
+                deny: [PermissionFlagsBits.Connect] // Inaccesible por defecto a @everyone (no verificados)
             }
         ];
 
         if (verifiedRole) {
             permissionOverwrites.push({
                 id: verifiedRole.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] // Público para verificados
             });
         }
 
+        // Permisos completos explícitos para el Creador de la Sala
         permissionOverwrites.push({
             id: member.id,
             allow: [
@@ -223,6 +225,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             const panelData = buildVoiceControlPanel(member.displayName);
             const controlMessage = await tempChannel.send(panelData);
 
+            // Registrar inmediatamente el canal activo antes de mover al usuario
             activeTempChannels.set(tempChannel.id, {
                 ownerId: member.id,
                 controlMsgId: controlMessage.id,
@@ -241,29 +244,30 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     if (newState.channel && activeTempChannels.has(newState.channel.id)) {
         const channelData = activeTempChannels.get(newState.channel.id);
         const channel = newState.channel;
+        const verifiedRole = guild.roles.cache.find(r => r.name.toLowerCase() === ROLE_VERIFIED_NAME.toLowerCase());
         
-        // Si el usuario NO es el dueño de la sala
+        // SEGURIDAD: Jamás eyectar al CREADOR/DUENO del canal bajo ninguna circunstancia
         if (member.id !== channelData.ownerId) {
             const everyoneOverwrite = channel.permissionOverwrites.cache.get(guild.roles.everyone.id);
-            const isLocked = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
+            const verifiedOverwrite = verifiedRole ? channel.permissionOverwrites.cache.get(verifiedRole.id) : null;
+            
+            // Un canal se considera BLOQUEADO/PRIVADO solo si se ha denegado Connect explícitamente a @everyone y/o verified
+            const isLockedForEveryone = everyoneOverwrite && everyoneOverwrite.deny.has(PermissionFlagsBits.Connect);
+            const isLockedForVerified = verifiedOverwrite && verifiedOverwrite.deny.has(PermissionFlagsBits.Connect);
 
+            const isLocked = isLockedForEveryone && (verifiedOverwrite ? isLockedForVerified : true);
             const isTrustedUser = channelData.trustedUsers.has(member.id);
 
-            // SI EL CANAL ESTÁ BLOQUEADO (PRIVADO):
-            if (isLocked) {
-                // Eyectar si NO está en la lista de Trust de la sala
-                if (!isTrustedUser) {
-                    try {
-                        await newState.disconnect();
-                        console.log(`[TEMPVOICE] ${member.user.tag} (Admin/User) fue eyectado de la sala BLOQUEADA de <@${channelData.ownerId}> por no tener Trust.`);
-                    } catch (err) {
-                        console.error('[TEMPVOICE] Error desconectando usuario de canal bloqueado:', err.message);
-                    }
-                    return;
+            // Solo eyectar si la sala está activamente BLOQUEADA y el usuario NO tiene Trust
+            if (isLocked && !isTrustedUser) {
+                try {
+                    await newState.disconnect();
+                    console.log(`[TEMPVOICE] ${member.user.tag} fue eyectado de la sala BLOQUEADA de <@${channelData.ownerId}>.`);
+                } catch (err) {
+                    console.error('[TEMPVOICE] Error desconectando usuario de canal bloqueado:', err.message);
                 }
-            } 
-            // SI EL CANAL ESTÁ PÚBLICO (DESBLOQUEADO):
-            // Los Admins y usuarios verificados pueden estar y entrar libremente SIN ser eyectados.
+                return;
+            }
         }
     }
 
