@@ -509,13 +509,13 @@ client.on('interactionCreate', async (interaction) => {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    const content = message.content.toLowerCase();
+
     // Comando !join (Notificar entrada a la cuenta de Valorant)
-    if (message.content.toLowerCase() === '!join') {
+    if (content === '!join') {
         try {
-            // Eliminar el mensaje del usuario (!join) para mantener limpio el canal
             try { await message.delete(); } catch (e) {}
 
-            // Obtener la hora actual formateada en la zona horaria del bot (HH:MM)
             const hora = new Date().toLocaleTimeString('es-ES', { 
                 timeZone: TIMEZONE, 
                 hour: '2-digit', 
@@ -523,9 +523,9 @@ client.on('messageCreate', async (message) => {
                 hour12: false 
             });
 
-            // Enviar el aviso con el formato exacto: [hora] @usuario joined in the account.
-            await message.channel.send(`[${hora}] <@${message.author.id}> joined in the account.`);
-            console.log(`[VALORANT] ${message.author.tag} notificó entrada a la cuenta a las ${hora}.`);
+            // Formato: [hora] @usuario joined in the account. @here
+            await message.channel.send(`[${hora}] <@${message.author.id}> joined in the account. @here`);
+            console.log(`[VALORANT] ${message.author.tag} notificó !join a las ${hora}.`);
 
         } catch (error) {
             console.error('[ERROR] Fallo al procesar el comando !join:', error);
@@ -533,7 +533,30 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
+    // Comando !leave (Notificar salida de la cuenta de Valorant)
+    if (content === '!leave') {
+        try {
+            try { await message.delete(); } catch (e) {}
+
+            const hora = new Date().toLocaleTimeString('es-ES', { 
+                timeZone: TIMEZONE, 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false 
+            });
+
+            // Formato: [hora] @usuario left the account. @here
+            await message.channel.send(`[${hora}] <@${message.author.id}> left the account. @here`);
+            console.log(`[VALORANT] ${message.author.tag} notificó !leave a las ${hora}.`);
+
+        } catch (error) {
+            console.error('[ERROR] Fallo al procesar el comando !leave:', error);
+        }
+        return;
+    }
+
     // Comando !nuke (Limpieza manual de canal)
+
     if (message.content.toLowerCase() === '!nuke') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return message.reply('❌ Necesitas permisos de Administrador para usar este comando.');
